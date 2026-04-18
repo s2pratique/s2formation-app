@@ -9,6 +9,9 @@
 <meta name="theme-color" content="#0d1f35"/>
 <title>S2 Formation — Tests Pratiques</title>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.3.0/dist/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 :root{--dark:#0d1f35;--mid:#1a3454;--btn:#1e4068;--btn-h:#254d7d;--accent:#2a5fa0;--sep:rgba(255,255,255,0.15);--muted:rgba(255,255,255,0.55);--ibg:rgba(255,255,255,0.08);--iborder:rgba(255,255,255,0.2);}
@@ -364,8 +367,9 @@ const MODULES = {
 
   TH: {
     id:'TH', label:'Travail en hauteur',
-    pdfTemplate:'pratique_TH.pdf', dossierSuffix:'TH',
-    pdfPageSize:{w:595.92,h:842.88},
+    useExcel: true,  // ← NOUVEAU : indique qu'on utilise Excel
+    excelTemplate: null,  // sera chargé dynamiquement
+    dossierSuffix:'TH',
     extraFields:[],
     themes:null,
     groups:[
@@ -382,21 +386,23 @@ const MODULES = {
        ]}
     ],
     admisRule:'all_groups', seuilGlobal:35,
-    pdfFields:{
-      nom:{x:153,y:192,w:235,h:30,size:10,align:'left'},
-      date:{x:461,y:200,w:82,h:16,size:9,align:'left'},
-      testeur:{x:381,y:757,w:48,h:20,size:7,align:'left'},
-      sig:{x:431,y:752,w:162,h:28},
-      admis:{x:458,y:476,w:39,h:25,size:14,align:'center'},
-      refuse:{x:458,y:503,w:39,h:25,size:14,align:'center'},
-      total:{x:458,y:443,w:50,h:30,size:13,align:'center'},
-      c1:{x:458,y:256,w:50,h:21,size:11,align:'center'},
-      c2:{x:458,y:283,w:50,h:21,size:11,align:'center'},
-      c3:{x:458,y:310,w:50,h:21,size:11,align:'center'},
-      c4:{x:458,y:337,w:50,h:21,size:11,align:'center'},
-      c5:{x:458,y:364,w:50,h:21,size:11,align:'center'},
-      c6:{x:458,y:391,w:50,h:21,size:11,align:'center'},
-      c7:{x:458,y:418,w:50,h:21,size:11,align:'center'},
+    // Mapping vers cellules Excel (selon feuille STYLE)
+    excelFields:{
+      nom:'C3',           // Nom candidat
+      date:'F3',          // Date
+      prenomTesteur:'E15', // Prénom testeur
+      nomTesteur:'E16',    // Nom testeur
+      sigTesteur:'F15',    // Signature (image)
+      c1:'F5',            // Note critère 1
+      c2:'F6',            // Note critère 2
+      c3:'F7',            // Note critère 3
+      c4:'F8',            // Note critère 4
+      c5:'F9',            // Note critère 5
+      c6:'F10',           // Note critère 6
+      c7:'F11',           // Note critère 7
+      total:'F12',        // Total
+      admis:'F13',        // X si admis
+      refuse:'F14'        // X si refusé
     }
   },
 
@@ -817,7 +823,130 @@ function collectFormMeta(){
 }
 
 /* ════════════════════════════════════════
-   MOTEUR PDF GÉNÉRIQUE
+   MOTEUR EXCEL (pour TH)
+════════════════════════════════════════ */
+let excelTemplateData = null;
+
+async function loadExcelTemplate(){
+  if(excelTemplateData) return excelTemplateData;
+  try{
+    const response = await fetch('Pratique-TH.xlsx');
+    excelTemplateData = await response.arrayBuffer();
+    return excelTemplateData;
+  }catch(e){
+    console.error('Erreur chargement Excel:',e);
+    throw new Error('Impossible de charger le modèle Excel');
+  }
+}
+
+async function buildExcelPDF(meta){
+  const ExcelJS = window.ExcelJS;
+  const workbook = new ExcelJS.Workbook();
+  
+  // Charger le template
+  const templateData = await loadExcelTemplate();
+  await workbook.xlsx.load(templateData);
+  
+  const worksheet = workbook.getWorksheet('PRATIQUE');
+  if(!worksheet) throw new Error('Feuille PRATIQUE introuvable');
+  
+  const mod = currentModule;
+  const fields = mod.excelFields;
+  
+  // Fonction helper pour écrire dans une cellule avec style
+  function writeCell(cellRef, value, options = {}){
+    const cell = worksheet.getCell(cellRef);
+    cell.value = value;
+    
+    // Appliquer le style selon la feuille STYLE
+    cell.font = { 
+      name: options.font || 'Arial', 
+      size: options.size || 13,
+      bold: options.bold || false
+    };
+    cell.alignment = { 
+      horizontal: options.hAlign || 'center', 
+      vertical: options.vAlign || 'center' 
+    };
+  }
+  
+  // Remplir les données selon excelFields
+  writeCell(fields.nom, meta.nom, {size:13, hAlign:'center', vAlign:'center'});
+  
+  // Date au format JJ/MM/AAAA
+  const dateParts = meta.date.split('-');
+  const dateFormatted = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
+  writeCell(fields.date, dateFormatted, {size:13, hAlign:'center', vAlign:'center'});
+  
+  // Testeur (prénom et nom séparés)
+  const testeurObj = testeurs.find(t=>`${t.prenom} ${t.nom}`.trim()===meta.testeur||t.prenom===meta.testeur);
+  if(testeurObj){
+    writeCell(fields.prenomTesteur, testeurObj.prenom||'', {size:8, hAlign:'center', vAlign:'bottom'});
+    writeCell(fields.nomTesteur, testeurObj.nom||'', {size:8, hAlign:'center', vAlign:'top'});
+    
+    // Signature (image) - on l'ajoute si elle existe
+    if(testeurObj.signature){
+      try{
+        // Convertir la signature base64 en image
+        const base64Data = testeurObj.signature.split(',')[1];
+        const imageId = workbook.addImage({
+          base64: base64Data,
+          extension: 'png',
+        });
+        
+        // Positionner l'image dans la cellule F15
+        worksheet.addImage(imageId, {
+          tl: { col: 5, row: 14 },  // F15 = colonne 5 (F), ligne 14 (15-1)
+          ext: { width: 120, height: 40 }
+        });
+      }catch(e){
+        console.warn('Erreur ajout signature:', e);
+      }
+    }
+  }
+  
+  // Notes des critères
+  const activeGroups = mod.themes ? mod.groups.filter(g=>meta.themes&&meta.themes[g.themeId]) : mod.groups;
+  activeGroups.forEach(g=>{
+    g.criteria.forEach(c=>{
+      if(meta.snap[c.id]!=null && fields[c.id]){
+        writeCell(fields[c.id], meta.snap[c.id].note, {size:13, bold:false, hAlign:'center', vAlign:'center'});
+      }
+    });
+  });
+  
+  // Total
+  const grandTotal = activeGroups.reduce((s,g)=>s+g.criteria.reduce((ss,c)=>ss+(meta.snap[c.id]?meta.snap[c.id].note:0),0),0);
+  writeCell(fields.total, grandTotal, {size:16, bold:true, hAlign:'center', vAlign:'center'});
+  
+  // ADMIS / REFUSÉ
+  if(meta.admis){
+    writeCell(fields.admis, 'X', {size:16, bold:true, hAlign:'center', vAlign:'center'});
+    writeCell(fields.refuse, '', {size:16, bold:true, hAlign:'center', vAlign:'center'});
+  }else{
+    writeCell(fields.admis, '', {size:16, bold:true, hAlign:'center', vAlign:'center'});
+    writeCell(fields.refuse, 'X', {size:16, bold:true, hAlign:'center', vAlign:'center'});
+  }
+  
+  // Générer le fichier Excel en mémoire
+  const excelBuffer = await workbook.xlsx.writeBuffer();
+  
+  // Convertir en base64 pour stockage ET envoi Drive
+  let binary = '';
+  const bytes = new Uint8Array(excelBuffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  const base64Excel = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + btoa(binary);
+  
+  // 🎯 SOLUTION : On stocke l'Excel ET on retournera le blob pour conversion PDF sur Drive
+  // L'Excel sera converti en PDF lors de l'envoi sur Google Drive (via l'API Drive)
+  return base64Excel;
+}
+
+/* ════════════════════════════════════════
+   MOTEUR PDF GÉNÉRIQUE (autres modules)
 ════════════════════════════════════════ */
 async function buildGenericPDF(meta){
   const{PDFDocument,StandardFonts,rgb}=PDFLib;
@@ -913,7 +1042,14 @@ async function finalizeForm(){
   if(!document.getElementById('f-nom').value.trim())return;
   const btn=document.getElementById('f-save-btn');btn.disabled=true;btn.textContent='Génération PDF...';
   try{
-    const meta=collectFormMeta();const pdfData=await buildGenericPDF(meta);
+    const meta=collectFormMeta();
+    // ✨ NOUVEAU : Choisir la bonne méthode selon le module
+    let pdfData;
+    if(currentModule.useExcel){
+      pdfData = await buildExcelPDF(meta);
+    }else{
+      pdfData = await buildGenericPDF(meta);
+    }
     upsertTest({...meta,status:'pending',pdfData});saveLocal();toast(`Test "${meta.nom}" finalisé`);
     showScreen('s-list');renderModuleList();
   }catch(e){toast('Erreur: '+e.message);}
@@ -923,10 +1059,22 @@ async function previewFormPDF(){
   if(!document.getElementById('f-nom').value.trim()){toast('Renseignez le nom du candidat');return;}
   const btn=document.querySelector('[onclick="previewFormPDF()"]');if(btn){btn.disabled=true;btn.textContent='...';}
   try{
-    const uri=await buildGenericPDF(collectFormMeta());
-    const win=window.open('','_blank');
-    if(win){win.document.write(`<html><body style="margin:0"><iframe src="${uri}" style="width:100%;height:100vh;border:none"></iframe></body></html>`);win.document.close();}
-    else{const a=document.createElement('a');a.href=uri;a.download='apercu.pdf';a.click();}
+    // ✨ NOUVEAU : Choisir la bonne méthode selon le module
+    let uri;
+    if(currentModule.useExcel){
+      uri = await buildExcelPDF(collectFormMeta());
+      // Pour Excel, on télécharge directement (impossible d'afficher dans iframe)
+      const a=document.createElement('a');
+      a.href=uri;
+      a.download='apercu.xlsx';
+      a.click();
+      toast('Excel téléchargé (conversion PDF en cours...)');
+    }else{
+      uri = await buildGenericPDF(collectFormMeta());
+      const win=window.open('','_blank');
+      if(win){win.document.write(`<html><body style="margin:0"><iframe src="${uri}" style="width:100%;height:100vh;border:none"></iframe></body></html>`);win.document.close();}
+      else{const a=document.createElement('a');a.href=uri;a.download='apercu.pdf';a.click();}
+    }
   }catch(e){toast('Erreur: '+e.message);}
   finally{if(btn){btn.disabled=false;btn.textContent='Aperçu';}}
 }
@@ -961,7 +1109,48 @@ function updateAllDriveBars(){updateListDriveBar();}
 ════════════════════════════════════════ */
 async function driveReq(url,opt={}){if(!driveToken)throw new Error('Non authentifié');const h={Authorization:`Bearer ${driveToken}`,...(opt.headers||{})};const r=await fetch(url,{...opt,headers:h});if(r.status===401){disconnectDrive();throw new Error('Token expiré');}return r;}
 async function findOrCreateFolder(name,parentId){const q=encodeURIComponent(`name='${name}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`);const r=await driveReq(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`);const d=await r.json();if(d.files&&d.files.length>0)return d.files[0].id;const cr=await driveReq('https://www.googleapis.com/drive/v3/files',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,mimeType:'application/vnd.google-apps.folder',parents:[parentId]})});return(await cr.json()).id;}
-async function uploadPDF(blob,filename,folderId){const m={name:filename,parents:[folderId],mimeType:'application/pdf'};const f=new FormData();f.append('metadata',new Blob([JSON.stringify(m)],{type:'application/json'}));f.append('file',blob);return(await driveReq('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',{method:'POST',body:f})).json();}
+async function uploadFileToDrive(blob,filename,folderId,convertToPDF=false){
+  // Si c'est un Excel et qu'on veut le convertir en PDF
+  if(convertToPDF && filename.endsWith('.xlsx')){
+    // Étape 1 : Upload l'Excel
+    const excelMeta={name:filename,parents:[folderId],mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'};
+    const excelForm=new FormData();
+    excelForm.append('metadata',new Blob([JSON.stringify(excelMeta)],{type:'application/json'}));
+    excelForm.append('file',blob);
+    const excelRes=await driveReq('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',{method:'POST',body:excelForm});
+    const excelFile=await excelRes.json();
+    
+    // Étape 2 : Exporter en PDF via l'API Google Drive
+    const pdfFilename=filename.replace('.xlsx','.pdf');
+    const exportUrl=`https://www.googleapis.com/drive/v3/files/${excelFile.id}/export?mimeType=application/pdf`;
+    const pdfBlob=await(await driveReq(exportUrl)).blob();
+    
+    // Étape 3 : Upload le PDF
+    const pdfMeta={name:pdfFilename,parents:[folderId],mimeType:'application/pdf'};
+    const pdfForm=new FormData();
+    pdfForm.append('metadata',new Blob([JSON.stringify(pdfMeta)],{type:'application/json'}));
+    pdfForm.append('file',pdfBlob);
+    const pdfRes=await driveReq('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',{method:'POST',body:pdfForm});
+    
+    // Étape 4 : Supprimer l'Excel temporaire
+    await driveReq(`https://www.googleapis.com/drive/v3/files/${excelFile.id}`,{method:'DELETE'});
+    
+    return pdfRes.json();
+  }
+  else{
+    // Upload PDF classique
+    const m={name:filename,parents:[folderId],mimeType:'application/pdf'};
+    const f=new FormData();
+    f.append('metadata',new Blob([JSON.stringify(m)],{type:'application/json'}));
+    f.append('file',blob);
+    return(await driveReq('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',{method:'POST',body:f})).json();
+  }
+}
+
+// Ancienne fonction pour compatibilité
+async function uploadPDF(blob,filename,folderId){
+  return uploadFileToDrive(blob,filename,folderId,false);
+}
 /* ════════════════════════════════════════
    ENVOI GROUPÉ : DRIVE + GMAIL
 ════════════════════════════════════════ */
@@ -994,14 +1183,23 @@ async function sendAll(){
       // 1. Upload Drive
       const folderId=await findOrCreateFolder(t.dossier,ROOT_FOLDER);
       const blob=await(await fetch(t.pdfData)).blob();
-      await uploadPDF(blob,t.filename,folderId);
+      
+      // ✨ NOUVEAU : Détection Excel et conversion auto en PDF
+      const isExcel = t.filename.endsWith('.xlsx') || t.pdfData.includes('spreadsheetml');
+      if(isExcel){
+        // Pour Excel, on crée un filename .xlsx temporaire
+        const excelFilename = t.filename.replace('.pdf','.xlsx');
+        await uploadFileToDrive(blob, excelFilename, folderId, true); // true = convertir en PDF
+      }else{
+        await uploadPDF(blob, t.filename, folderId);
+      }
       driveOk++;
 
       // 2. Email via Gmail API
       const testeurObj=testeurs.find(te=>`${te.prenom} ${te.nom}`.trim()===t.testeur||te.prenom===t.testeur);
       const toEmail=testeurObj?.email||'';
       if(toEmail){
-        try{ await sendGmail(toEmail,t); mailOk++; }
+        try{ await sendGmail(toEmail,t,isExcel); mailOk++; }
         catch(e){ errors.push(`Mail ${t.nom}: ${e.message}`); }
       } else { mailSkipped++; }
 
@@ -1025,13 +1223,53 @@ async function sendAll(){
   toast(msg);
 }
 
-async function sendGmail(toEmail, test){
+async function sendGmail(toEmail, test, isExcel=false){
   // Construire l'email multipart avec le PDF en pièce jointe
   const subject=`Résultat test pratique — ${test.nom} — ${test.date}`;
   const body=`Bonjour,\n\nVeuillez trouver en pièce jointe le résultat du test pratique de ${test.nom} du ${test.date}.\n\nRésultat : ${test.admis?'ADMIS':'REFUSÉ'}\n\nCordialement,\nS2 Formation`;
 
-  // Convertir pdfData (base64 data URI) en base64 pur
-  const pdfBase64=test.pdfData.split(',')[1];
+  // Récupérer les données du fichier
+  let fileBase64 = test.pdfData.split(',')[1];
+  let filename = test.filename;
+  let mimeType = 'application/pdf';
+  
+  // Si c'est un Excel, on doit d'abord le convertir en PDF pour l'email
+  if(isExcel){
+    try{
+      // Convertir l'Excel en PDF via Google Drive API
+      // 1. Upload temporaire de l'Excel
+      const excelBlob = await(await fetch(test.pdfData)).blob();
+      const tempMeta = {
+        name: 'temp_' + Date.now() + '.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      };
+      const tempForm = new FormData();
+      tempForm.append('metadata', new Blob([JSON.stringify(tempMeta)], {type:'application/json'}));
+      tempForm.append('file', excelBlob);
+      const tempRes = await driveReq('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',{method:'POST',body:tempForm});
+      const tempFile = await tempRes.json();
+      
+      // 2. Exporter en PDF
+      const exportUrl = `https://www.googleapis.com/drive/v3/files/${tempFile.id}/export?mimeType=application/pdf`;
+      const pdfBlob = await(await driveReq(exportUrl)).blob();
+      
+      // 3. Convertir le blob PDF en base64
+      const reader = new FileReader();
+      fileBase64 = await new Promise((resolve) => {
+        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+        reader.readAsDataURL(pdfBlob);
+      });
+      
+      // 4. Nettoyer : supprimer le fichier temporaire
+      await driveReq(`https://www.googleapis.com/drive/v3/files/${tempFile.id}`,{method:'DELETE'});
+      
+      // 5. Corriger le nom du fichier pour le PDF
+      filename = test.filename.replace('.xlsx', '.pdf');
+    }catch(e){
+      console.error('Erreur conversion Excel→PDF pour email:', e);
+      throw new Error('Impossible de convertir l\'Excel en PDF pour l\'email');
+    }
+  }
 
   // Construire le message MIME multipart
   const boundary='s2formation_boundary_'+Date.now();
@@ -1048,11 +1286,11 @@ async function sendGmail(toEmail, test){
     body,
     ``,
     `--${boundary}`,
-    `Content-Type: application/pdf; name="${test.filename}"`,
-    `Content-Disposition: attachment; filename="${test.filename}"`,
+    `Content-Type: ${mimeType}; name="${filename}"`,
+    `Content-Disposition: attachment; filename="${filename}"`,
     `Content-Transfer-Encoding: base64`,
     ``,
-    pdfBase64,
+    fileBase64,
     ``,
     `--${boundary}--`,
   ].join('\r\n');
