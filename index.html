@@ -1181,38 +1181,78 @@ async function sendAll(){
   document.getElementById('list-sync-msg').textContent=`Envoi de ${pending.length} PDF(s)...`;
   isSyncing=true;
 
-  let driveOk=0, mailOk=0, mailSkipped=0, errors=[];
+  let driveOk=0, errors=[];
+  const testsEnvoyes = []; // Pour le récapitulatif email
 
   for(const t of pending){
     t.status='syncing'; renderListTests();
     try{
-      // 1. Upload Drive
+      // Upload Drive uniquement
       const folderId=await findOrCreateFolder(t.dossier,ROOT_FOLDER);
       const blob=await(await fetch(t.pdfData)).blob();
       
-      // ✨ NOUVEAU : Détection Excel et conversion auto en PDF
+      // Détection Excel et conversion auto en PDF
       const isExcel = t.filename.endsWith('.xlsx') || t.pdfData.includes('spreadsheetml');
       if(isExcel){
-        // Pour Excel, on crée un filename .xlsx temporaire
         const excelFilename = t.filename.replace('.pdf','.xlsx');
-        await uploadFileToDrive(blob, excelFilename, folderId, true); // true = convertir en PDF
+        await uploadFileToDrive(blob, excelFilename, folderId, true);
       }else{
         await uploadPDF(blob, t.filename, folderId);
       }
       driveOk++;
-
-      // 2. Email via Gmail API
-      const testeurObj=testeurs.find(te=>`${te.prenom} ${te.nom}`.trim()===t.testeur||te.prenom===t.testeur);
-      const toEmail=testeurObj?.email||'';
-      if(toEmail){
-        try{ await sendGmail(toEmail,t,isExcel); mailOk++; }
-        catch(e){ errors.push(`Mail ${t.nom}: ${e.message}`); }
-      } else { mailSkipped++; }
-
       t.status='synced';
+      
+      // Ajouter au récapitulatif
+      testsEnvoyes.push({
+        date: t.date,
+        nom: t.nom,
+        tests: getTestsNames(t), // Fonction pour récupérer les noms des tests
+        resultat: t.admis ? 'ADMIS' : 'REFUSÉ',
+        testeur: t.testeur,
+        dossier: t.dossier
+      });
+      
     }catch(e){
       t.status='error';
       errors.push(`Drive ${t.nom}: ${e.message}`);
+    }
+    saveLocal(); renderListTests();
+  }
+
+  isSyncing=false;
+  bar.style.display='none';
+  btn.disabled=false;
+  renderModuleList();
+
+  // Envoyer UN SEUL email récapitulatif si au moins un test a été envoyé
+  if(testsEnvoyes.length > 0){
+    try{
+      await sendRecapEmail(testsEnvoyes);
+      toast(`${driveOk} PDF${driveOk>1?'s':''} envoyé${driveOk>1?'s':''} sur Drive + email récapitulatif envoyé${errors.length?' — '+errors.length+' erreur(s)':''}`);
+    }catch(e){
+      toast(`${driveOk} PDF${driveOk>1?'s':''} envoyé${driveOk>1?'s':''} sur Drive — Erreur email: ${e.message}`);
+    }
+  }else{
+    toast(errors.length ? `Erreurs: ${errors.join(', ')}` : 'Aucun fichier envoyé');
+  }
+}
+
+// Helper pour récupérer le(s) nom(s) des tests passés
+function getTestsNames(test){
+  const mod = MODULES[currentModuleId];
+  if(!mod) return currentModuleId;
+  
+  // Si le module a des thèmes (comme Échafaudage)
+  if(mod.themes && test.themes){
+    const themesActifs = mod.themes
+      .filter(th => test.themes[th.id])
+      .map(th => th.label);
+    return themesActifs.length > 0 ? themesActifs.join(' + ') : mod.label;
+  }
+  
+  // Sinon, retourner le label du module
+  return mod.label;
+}
     }
     saveLocal(); renderListTests();
   }
@@ -1229,91 +1269,109 @@ async function sendAll(){
   toast(msg);
 }
 
-async function sendGmail(toEmail, test, isExcel=false){
-  // Construire l'email multipart avec le PDF en pièce jointe
-  const subject=`Résultat test pratique — ${test.nom} — ${test.date}`;
-  const body=`Bonjour,\n\nVeuillez trouver en pièce jointe le résultat du test pratique de ${test.nom} du ${test.date}.\n\nRésultat : ${test.admis?'ADMIS':'REFUSÉ'}\n\nCordialement,\nS2 Formation`;
-
-  // Récupérer les données du fichier
-  let fileBase64 = test.pdfData.split(',')[1];
-  let filename = test.filename;
-  let mimeType = 'application/pdf';
+async function sendRecapEmail(testsEnvoyes){
+  // Trouver tous les testeurs concernés
+  const testeursEmails = new Set();
+  testsEnvoyes.forEach(t => {
+    const testeurObj = testeurs.find(te => `${te.prenom} ${te.nom}`.trim() === t.testeur || te.prenom === t.testeur);
+    if(testeurObj && testeurObj.email) testeursEmails.add(testeurObj.email);
+  });
   
-  // Si c'est un Excel, on doit d'abord le convertir en PDF pour l'email
-  if(isExcel){
-    try{
-      // ✅ CORRECTION : Convertir Excel → Google Sheets → PDF
-      const excelBlob = await(await fetch(test.pdfData)).blob();
-      
-      // 1. Upload et convertir en Google Sheets
-      const tempMeta = {
-        name: 'temp_' + Date.now(),
-        mimeType: 'application/vnd.google-apps.spreadsheet'  // ← Convertir en Google Sheets
-      };
-      const tempForm = new FormData();
-      tempForm.append('metadata', new Blob([JSON.stringify(tempMeta)], {type:'application/json'}));
-      tempForm.append('file', excelBlob);
-      const tempRes = await driveReq('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',{method:'POST',body:tempForm});
-      const tempFile = await tempRes.json();
-      
-      // 2. Exporter en PDF
-      const exportUrl = `https://www.googleapis.com/drive/v3/files/${tempFile.id}/export?mimeType=application/pdf`;
-      const pdfBlob = await(await driveReq(exportUrl)).blob();
-      
-      // 3. Convertir le blob PDF en base64
-      const reader = new FileReader();
-      fileBase64 = await new Promise((resolve) => {
-        reader.onloadend = () => resolve(reader.result.split(',')[1]);
-        reader.readAsDataURL(pdfBlob);
-      });
-      
-      // 4. Nettoyer : supprimer le fichier temporaire
-      await driveReq(`https://www.googleapis.com/drive/v3/files/${tempFile.id}`,{method:'DELETE'});
-      
-      // 5. Corriger le nom du fichier pour le PDF
-      filename = test.filename.replace('.xlsx', '.pdf');
-    }catch(e){
-      console.error('Erreur conversion Excel→PDF pour email:', e);
-      throw new Error('Impossible de convertir l\'Excel en PDF pour l\'email');
-    }
+  if(testeursEmails.size === 0){
+    throw new Error('Aucun testeur n\'a d\'adresse email');
   }
+  
+  // Récupérer le nom du dossier (on prend le premier test)
+  const nomDossier = testsEnvoyes[0].dossier;
+  
+  // Construire le sujet
+  const subject = `Résultats pratique "${nomDossier}"`;
+  
+  // Construire le corps avec tableau HTML
+  let tableauHTML = `
+<html>
+<head>
+<style>
+  body { font-family: Arial, sans-serif; color: #333; }
+  h2 { color: #1a3454; }
+  table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+  th { background-color: #1a3454; color: white; padding: 12px; text-align: left; font-weight: bold; }
+  td { padding: 10px; border-bottom: 1px solid #ddd; }
+  tr:hover { background-color: #f5f5f5; }
+  .admis { color: #22c55e; font-weight: bold; }
+  .refuse { color: #ef4444; font-weight: bold; }
+</style>
+</head>
+<body>
+  <h2>Tests pratiques terminés</h2>
+  <p>Les résultats suivants ont été enregistrés sur Google Drive :</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Nom Prénom</th>
+        <th>Test(s) passé(s)</th>
+        <th>Résultat</th>
+        <th>Testeur</th>
+      </tr>
+    </thead>
+    <tbody>
+`;
 
-  // Construire le message MIME multipart
-  const boundary='s2formation_boundary_'+Date.now();
-  const mime=[
+  testsEnvoyes.forEach(t => {
+    const dateFormatted = t.date.split('-').reverse().join('/');
+    const resultatClass = t.resultat === 'ADMIS' ? 'admis' : 'refuse';
+    tableauHTML += `
+      <tr>
+        <td>${dateFormatted}</td>
+        <td>${t.nom}</td>
+        <td>${t.tests}</td>
+        <td class="${resultatClass}">${t.resultat}</td>
+        <td>${t.testeur}</td>
+      </tr>
+`;
+  });
+
+  tableauHTML += `
+    </tbody>
+  </table>
+  <p style="margin-top: 30px; color: #666;">
+    Ces documents sont disponibles dans le dossier Google Drive : <strong>${nomDossier}</strong>
+  </p>
+  <p style="color: #999; font-size: 12px; margin-top: 40px;">
+    — S2 Formation
+  </p>
+</body>
+</html>
+`;
+
+  // Construire le message MIME
+  const boundary = 's2formation_boundary_' + Date.now();
+  const toAddresses = Array.from(testeursEmails).join(', ');
+  
+  const mime = [
     `MIME-Version: 1.0`,
-    `To: ${toEmail}`,
+    `To: ${toAddresses}`,
     `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    ``,
-    `--${boundary}`,
-    `Content-Type: text/plain; charset="UTF-8"`,
+    `Content-Type: text/html; charset="UTF-8"`,
     `Content-Transfer-Encoding: quoted-printable`,
     ``,
-    body,
-    ``,
-    `--${boundary}`,
-    `Content-Type: ${mimeType}; name="${filename}"`,
-    `Content-Disposition: attachment; filename="${filename}"`,
-    `Content-Transfer-Encoding: base64`,
-    ``,
-    fileBase64,
-    ``,
-    `--${boundary}--`,
+    tableauHTML
   ].join('\r\n');
 
   // Encoder en base64url pour l'API Gmail
-  const encoded=btoa(unescape(encodeURIComponent(mime)))
-    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  const encoded = btoa(unescape(encodeURIComponent(mime)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-  const res=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{
-    method:'POST',
-    headers:{Authorization:`Bearer ${driveToken}`,'Content-Type':'application/json'},
-    body:JSON.stringify({raw:encoded}),
+  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${driveToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: encoded }),
   });
-  if(!res.ok){
-    const err=await res.json();
-    throw new Error(err.error?.message||'Erreur Gmail');
+  
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error?.message || 'Erreur Gmail');
   }
 }
 
