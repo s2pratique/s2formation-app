@@ -1213,6 +1213,7 @@ async function sendAll(){
       });
       
     }catch(e){
+      console.error('❌ Erreur upload Drive:', e);
       t.status='error';
       errors.push(`Drive ${t.nom}: ${e.message}`);
     }
@@ -1227,9 +1228,11 @@ async function sendAll(){
   // Envoyer UN SEUL email récapitulatif si au moins un test a été envoyé
   if(testsEnvoyes.length > 0){
     try{
+      console.log('📧 Envoi email récapitulatif pour', testsEnvoyes.length, 'test(s)');
       await sendRecapEmail(testsEnvoyes);
       toast(`${driveOk} PDF${driveOk>1?'s':''} envoyé${driveOk>1?'s':''} sur Drive + email récapitulatif envoyé${errors.length?' — '+errors.length+' erreur(s)':''}`);
     }catch(e){
+      console.error('❌ Erreur envoi email:', e);
       toast(`${driveOk} PDF${driveOk>1?'s':''} envoyé${driveOk>1?'s':''} sur Drive — Erreur email: ${e.message}`);
     }
   }else{
@@ -1270,19 +1273,29 @@ function getTestsNames(test){
 }
 
 async function sendRecapEmail(testsEnvoyes){
+  console.log('📧 sendRecapEmail appelée avec', testsEnvoyes.length, 'test(s)');
+  
   // Trouver tous les testeurs concernés
   const testeursEmails = new Set();
   testsEnvoyes.forEach(t => {
     const testeurObj = testeurs.find(te => `${te.prenom} ${te.nom}`.trim() === t.testeur || te.prenom === t.testeur);
-    if(testeurObj && testeurObj.email) testeursEmails.add(testeurObj.email);
+    console.log('🔍 Recherche email pour testeur:', t.testeur, '→', testeurObj);
+    if(testeurObj && testeurObj.email) {
+      console.log('✅ Email trouvé:', testeurObj.email);
+      testeursEmails.add(testeurObj.email);
+    }
   });
   
+  console.log('📬 Emails destinataires:', Array.from(testeursEmails));
+  
   if(testeursEmails.size === 0){
+    console.error('❌ Aucun email trouvé');
     throw new Error('Aucun testeur n\'a d\'adresse email');
   }
   
   // Récupérer le nom du dossier (on prend le premier test)
   const nomDossier = testsEnvoyes[0].dossier;
+  console.log('📁 Nom dossier:', nomDossier);
   
   // Construire le sujet
   const subject = `Résultats pratique "${nomDossier}"`;
@@ -1349,6 +1362,8 @@ async function sendRecapEmail(testsEnvoyes){
   const boundary = 's2formation_boundary_' + Date.now();
   const toAddresses = Array.from(testeursEmails).join(', ');
   
+  console.log('📮 Destinataires finaux:', toAddresses);
+  
   const mime = [
     `MIME-Version: 1.0`,
     `To: ${toAddresses}`,
@@ -1363,6 +1378,8 @@ async function sendRecapEmail(testsEnvoyes){
   const encoded = btoa(unescape(encodeURIComponent(mime)))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
+  console.log('📤 Envoi email via Gmail API...');
+  
   const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method: 'POST',
     headers: { Authorization: `Bearer ${driveToken}`, 'Content-Type': 'application/json' },
@@ -1371,8 +1388,11 @@ async function sendRecapEmail(testsEnvoyes){
   
   if (!res.ok) {
     const err = await res.json();
+    console.error('❌ Erreur Gmail API:', err);
     throw new Error(err.error?.message || 'Erreur Gmail');
   }
+  
+  console.log('✅ Email envoyé avec succès !');
 }
 
 async function startSync(){ await sendAll(); } // compatibilité
