@@ -165,15 +165,6 @@ html,body{height:100%;background:var(--dark);font-family:-apple-system,BlinkMacS
     <div class="conn-pill online" id="cp-home"><div class="cdot"></div><span id="cl-home">En ligne</span></div>
   </div>
   <div class="scroll">
-    <div class="sep-row"><span class="sep-txt">Autorisation de conduite</span></div>
-    <div class="mod-grid">
-      <button class="mod-btn dis"><div class="mod-label">R482</div><span class="wip-badge">Bientôt</span></button>
-      <button class="mod-btn dis"><div class="mod-label">R484</div><span class="wip-badge">Bientôt</span></button>
-      <button class="mod-btn dis"><div class="mod-label">R485</div><span class="wip-badge">Bientôt</span></button>
-      <button class="mod-btn dis"><div class="mod-label">R486</div><span class="wip-badge">Bientôt</span></button>
-      <button class="mod-btn dis"><div class="mod-label">R489</div><span class="wip-badge">Bientôt</span></button>
-      <button class="mod-btn dis"><div class="mod-label">R490</div><span class="wip-badge">Bientôt</span></button>
-    </div>
     <div class="sep-row"><span class="sep-txt">Formations annexes</span></div>
     <button class="mod-btn full" id="btn-th" style="margin-bottom:10px">
       <div><div class="mod-label">Travail en hauteur</div><div class="mod-sub">Test pratique · Seuil 35/50</div></div>
@@ -1123,7 +1114,7 @@ function loadLocal(){
     if(t)allTests=JSON.parse(t);
     else{const oth=localStorage.getItem('s2_tests'),oec=localStorage.getItem('s2_echaf_tests');if(oth)allTests.TH=JSON.parse(oth);if(oec)allTests.ECHAF=JSON.parse(oec);}
     const d=localStorage.getItem('s2_drive');if(d){const{token,user}=JSON.parse(d);driveToken=token;driveUser=user;}
-    const te=localStorage.getItem('s2_testeurs');if(te)testeurs=JSON.parse(te);else testeurs=[{id:1,prenom:'Erwan',nom:'',signature:null},{id:2,prenom:'Stéphane',nom:'',signature:null},{id:3,prenom:'Théo',nom:'',signature:null}];
+    const te=localStorage.getItem('s2_testeurs');if(te)testeurs=JSON.parse(te);else testeurs=[];
   }catch(e){}
 }
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3200);}
