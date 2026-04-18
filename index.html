@@ -1112,28 +1112,34 @@ async function findOrCreateFolder(name,parentId){const q=encodeURIComponent(`nam
 async function uploadFileToDrive(blob,filename,folderId,convertToPDF=false){
   // Si c'est un Excel et qu'on veut le convertir en PDF
   if(convertToPDF && filename.endsWith('.xlsx')){
-    // Étape 1 : Upload l'Excel
-    const excelMeta={name:filename,parents:[folderId],mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'};
-    const excelForm=new FormData();
-    excelForm.append('metadata',new Blob([JSON.stringify(excelMeta)],{type:'application/json'}));
-    excelForm.append('file',blob);
-    const excelRes=await driveReq('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',{method:'POST',body:excelForm});
-    const excelFile=await excelRes.json();
+    // ✅ SOLUTION : Convertir Excel → Google Sheets → PDF
     
-    // Étape 2 : Exporter en PDF via l'API Google Drive
+    // Étape 1 : Upload l'Excel ET le convertir en Google Sheets
+    const sheetMeta={
+      name:filename.replace('.xlsx',''),
+      parents:[folderId],
+      mimeType:'application/vnd.google-apps.spreadsheet'  // ← IMPORTANT : Convertir en Google Sheets
+    };
+    const sheetForm=new FormData();
+    sheetForm.append('metadata',new Blob([JSON.stringify(sheetMeta)],{type:'application/json'}));
+    sheetForm.append('file',blob);
+    const sheetRes=await driveReq('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',{method:'POST',body:sheetForm});
+    const sheetFile=await sheetRes.json();
+    
+    // Étape 2 : Exporter le Google Sheets en PDF
     const pdfFilename=filename.replace('.xlsx','.pdf');
-    const exportUrl=`https://www.googleapis.com/drive/v3/files/${excelFile.id}/export?mimeType=application/pdf`;
+    const exportUrl=`https://www.googleapis.com/drive/v3/files/${sheetFile.id}/export?mimeType=application/pdf`;
     const pdfBlob=await(await driveReq(exportUrl)).blob();
     
-    // Étape 3 : Upload le PDF
+    // Étape 3 : Upload le PDF final
     const pdfMeta={name:pdfFilename,parents:[folderId],mimeType:'application/pdf'};
     const pdfForm=new FormData();
     pdfForm.append('metadata',new Blob([JSON.stringify(pdfMeta)],{type:'application/json'}));
     pdfForm.append('file',pdfBlob);
     const pdfRes=await driveReq('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',{method:'POST',body:pdfForm});
     
-    // Étape 4 : Supprimer l'Excel temporaire
-    await driveReq(`https://www.googleapis.com/drive/v3/files/${excelFile.id}`,{method:'DELETE'});
+    // Étape 4 : Supprimer le Google Sheets temporaire
+    await driveReq(`https://www.googleapis.com/drive/v3/files/${sheetFile.id}`,{method:'DELETE'});
     
     return pdfRes.json();
   }
@@ -1236,12 +1242,13 @@ async function sendGmail(toEmail, test, isExcel=false){
   // Si c'est un Excel, on doit d'abord le convertir en PDF pour l'email
   if(isExcel){
     try{
-      // Convertir l'Excel en PDF via Google Drive API
-      // 1. Upload temporaire de l'Excel
+      // ✅ CORRECTION : Convertir Excel → Google Sheets → PDF
       const excelBlob = await(await fetch(test.pdfData)).blob();
+      
+      // 1. Upload et convertir en Google Sheets
       const tempMeta = {
-        name: 'temp_' + Date.now() + '.xlsx',
-        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        name: 'temp_' + Date.now(),
+        mimeType: 'application/vnd.google-apps.spreadsheet'  // ← Convertir en Google Sheets
       };
       const tempForm = new FormData();
       tempForm.append('metadata', new Blob([JSON.stringify(tempMeta)], {type:'application/json'}));
