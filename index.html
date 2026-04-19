@@ -887,21 +887,64 @@ async function buildExcelPDF(meta){
   const mod = currentModule;
   const fields = mod.excelFields;
   
+  // 📏 IMPORTANT : Ajuster les hauteurs de lignes pour éviter la troncature lors de la conversion PDF
+  // Les cellules avec beaucoup de texte ou des titres doivent avoir une hauteur suffisante
+  const rowHeights = {
+    1: 120,   // D1 - Titre principal (plus grand)
+    2: 35,    // D2 - Sous-titre
+    3: 38,    // Ligne avec nom et date (plus haute pour éviter troncature)
+    4: 54,    // En-têtes colonnes
+    5: 20, 17: 18, 22: 18,  // Titres de sections
+    14: 18, 20: 18, 26: 18,  // Lignes avec texte long (vérifications)
+    29: 38, 30: 38  // Lignes avec long texte explicatif
+  };
+  
+  Object.entries(rowHeights).forEach(([row, height]) => {
+    const r = worksheet.getRow(parseInt(row));
+    if(r) r.height = height;
+  });
+  
+  // 📏 Ajuster aussi les largeurs de colonnes si nécessaire
+  worksheet.getColumn('B').width = 12;  // Textes longs (MONTAGE, UTILISATION, etc.)
+  worksheet.getColumn('D').width = 20;  // Critères d'évaluation (texte moyen/long)
+  worksheet.getColumn('F').width = 14;  // "Date du test :"
+  worksheet.getColumn('G').width = 10;  // Notes
+  
+  // 📝 Réduire légèrement la taille de police des titres pour éviter la troncature en PDF
+  const cellsToReduceFont = ['D1', 'D2', 'F3'];
+  cellsToReduceFont.forEach(cellRef => {
+    const cell = worksheet.getCell(cellRef);
+    if(cell.font && cell.font.size){
+      cell.font = {
+        ...cell.font,
+        size: Math.max(8, (cell.font.size || 11) - 2)  // Réduire de 2 points (min 8)
+      };
+    }
+  });
+  
   // Fonction helper pour écrire dans une cellule avec style
   function writeCell(cellRef, value, options = {}){
     const cell = worksheet.getCell(cellRef);
     cell.value = value;
     
-    // Appliquer le style selon la feuille STYLE
-    cell.font = { 
-      name: options.font || 'Arial', 
-      size: options.size || 10,
-      bold: options.bold || false
-    };
-    cell.alignment = { 
-      horizontal: options.hAlign || 'center', 
-      vertical: options.vAlign || 'center' 
-    };
+    // Appliquer le style SEULEMENT si spécifié, sinon garder le style du template
+    if(options.font || options.size || options.bold !== undefined){
+      cell.font = { 
+        name: options.font || cell.font?.name || 'Arial', 
+        size: options.size || cell.font?.size || 10,
+        bold: options.bold !== undefined ? options.bold : (cell.font?.bold || false)
+      };
+    }
+    
+    if(options.hAlign || options.vAlign){
+      // Préserver wrap_text du template si présent
+      const existingWrap = cell.alignment?.wrapText || false;
+      cell.alignment = { 
+        horizontal: options.hAlign || cell.alignment?.horizontal || 'center', 
+        vertical: options.vAlign || cell.alignment?.vertical || 'center',
+        wrapText: existingWrap  // ← IMPORTANT : garder le wrap du template
+      };
+    }
   }
   
   // Remplir les données selon excelFields
