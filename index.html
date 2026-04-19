@@ -408,6 +408,8 @@ const MODULES = {
 
   ECHAF: {
     id:'ECHAF', label:'Échafaudages R408/R457',
+    useExcel: true,  // ← Utilise Excel au lieu de PDF
+    excelTemplate: 'Pratique-ECHAF.xlsx',  // Template Excel
     pdfTemplate:'echafaudage.pdf', dossierSuffix:'Echafaudage',
     pdfPageSize:{w:595.32,h:841.92},
     extraFields:[{id:'heure',label:'Heure du test',type:'time'}],
@@ -481,6 +483,25 @@ const MODULES = {
       r5:{x:463,y:630,w:41,h:10,size:9,align:'center'},
       r6:{x:463,y:651,w:41,h:10,size:9,align:'center'},
       st_recep:{x:463,y:670,w:41,h:13,size:10,align:'center'},
+    },
+    // Mapping vers cellules Excel (selon feuille STYLE de Pratique-ECHAF.xlsx)
+    excelFields:{
+      nom:'D3',              // NOM Prénom Candidat
+      date:'G3',             // Date du test
+      prenomTesteur:'F31',   // Prénom testeur
+      nomTesteur:'F32',      // Nom testeur
+      sigTesteur:'G31',      // Signature testeur (image, sur 2 lignes G31:G32)
+      // Critères Montage & Démontage
+      m1:'G5',   m2:'G6',   m3:'G7',   m4:'G8',   m5:'G9',   m6:'G10',
+      m7:'G11',  m8:'G12',  m9:'G13',  m10:'G14', m11:'G15',
+      st_mont:'G16',  // SOUS-TOTAL DEMONTAGE
+      // Critères Utilisation
+      u1:'G17',  u2:'G18',  u3:'G19',  u4:'G20',
+      st_util:'G21',  // SOUS-TOTAL UTILISATION
+      // Critères Réception
+      r1:'G22',  r2:'G23',  r3:'G24',  r4:'G25',  r5:'G26',  r6:'G27',
+      st_recep:'G28',  // SOUS-TOTAL RECEPTION
+      // admis/refuse ne sont pas dans le template Excel, on ne les gère pas
     }
   },
   // ── AJOUTER R482, R484, etc. ici sous la même forme ──
@@ -818,7 +839,9 @@ function collectFormMeta(){
   const themes=mod.themes?{...formThemes}:null;
   const grandMax=groups.reduce((s,g)=>s+g.criteria.reduce((ss,c)=>ss+c.max,0),0);
   const scoreLabel=grandMax?`${grandTotal}/${grandMax}`:'';
-  const filename=`${dossier}_${nom.replace(/\s+/g,'_')}.pdf`;
+  // Nom de fichier : .xlsx si useExcel, sinon .pdf
+  const extension = mod.useExcel ? '.xlsx' : '.pdf';
+  const filename=`${dossier}_${nom.replace(/\s+/g,'_')}${extension}`;
   return{nom,date,testeur,dossier,extra,snap,themes,admis,scoreLabel,filename};
 }
 
@@ -828,14 +851,22 @@ function collectFormMeta(){
 let excelTemplateData = null;
 
 async function loadExcelTemplate(){
-  if(excelTemplateData) return excelTemplateData;
+  // Déterminer le template à charger selon le module actuel
+  const templateFile = currentModule.excelTemplate || 'Pratique-TH.xlsx';
+  
+  // Cache par module
+  if(!window.excelTemplateCache) window.excelTemplateCache = {};
+  if(window.excelTemplateCache[templateFile]) return window.excelTemplateCache[templateFile];
+  
   try{
-    const response = await fetch('Pratique-TH.xlsx');
-    excelTemplateData = await response.arrayBuffer();
-    return excelTemplateData;
+    const response = await fetch(templateFile);
+    if(!response.ok) throw new Error(`Fichier ${templateFile} introuvable`);
+    const data = await response.arrayBuffer();
+    window.excelTemplateCache[templateFile] = data;
+    return data;
   }catch(e){
     console.error('Erreur chargement Excel:',e);
-    throw new Error('Impossible de charger le modèle Excel');
+    throw new Error(`Impossible de charger le modèle Excel : ${templateFile}`);
   }
 }
 
@@ -847,8 +878,9 @@ async function buildExcelPDF(meta){
   const templateData = await loadExcelTemplate();
   await workbook.xlsx.load(templateData);
   
-  const worksheet = workbook.getWorksheet('PRATIQUE');
-  if(!worksheet) throw new Error('Feuille PRATIQUE introuvable');
+  // La feuille peut s'appeler "PRATIQUE" ou "Feuille 1" selon le fichier
+  let worksheet = workbook.getWorksheet('PRATIQUE') || workbook.getWorksheet('Feuille 1');
+  if(!worksheet) throw new Error('Feuille PRATIQUE introuvable dans le template Excel');
   
   const mod = currentModule;
   const fields = mod.excelFields;
@@ -861,7 +893,7 @@ async function buildExcelPDF(meta){
     // Appliquer le style selon la feuille STYLE
     cell.font = { 
       name: options.font || 'Arial', 
-      size: options.size || 13,
+      size: options.size || 10,
       bold: options.bold || false
     };
     cell.alignment = { 
@@ -880,12 +912,12 @@ async function buildExcelPDF(meta){
   
   // Testeur (prénom et nom séparés)
   const testeurObj = testeurs.find(t=>`${t.prenom} ${t.nom}`.trim()===meta.testeur||t.prenom===meta.testeur);
-  if(testeurObj){
+  if(testeurObj && fields.prenomTesteur){
     writeCell(fields.prenomTesteur, testeurObj.prenom||'', {size:8, hAlign:'center', vAlign:'bottom'});
     writeCell(fields.nomTesteur, testeurObj.nom||'', {size:8, hAlign:'center', vAlign:'top'});
     
     // Signature (image) - on l'ajoute si elle existe
-    if(testeurObj.signature){
+    if(testeurObj.signature && fields.sigTesteur){
       try{
         // Convertir la signature base64 en image
         const base64Data = testeurObj.signature.split(',')[1];
@@ -894,11 +926,17 @@ async function buildExcelPDF(meta){
           extension: 'png',
         });
         
-        // Positionner l'image dans la cellule F15
-        worksheet.addImage(imageId, {
-          tl: { col: 5, row: 14 },  // F15 = colonne 5 (F), ligne 14 (15-1)
-          ext: { width: 120, height: 40 }
-        });
+        // Positionner l'image dans la cellule sigTesteur (ex: G31:G32)
+        // Extraire colonne et ligne de la cellule (ex: G31 -> col=6, row=30)
+        const match = fields.sigTesteur.match(/([A-Z]+)(\d+)/);
+        if(match){
+          const col = match[1].charCodeAt(0) - 65; // G -> 6
+          const row = parseInt(match[2]) - 1;       // 31 -> 30
+          worksheet.addImage(imageId, {
+            tl: { col, row },
+            ext: { width: 120, height: 40 }
+          });
+        }
       }catch(e){
         console.warn('Erreur ajout signature:', e);
       }
@@ -910,22 +948,31 @@ async function buildExcelPDF(meta){
   activeGroups.forEach(g=>{
     g.criteria.forEach(c=>{
       if(meta.snap[c.id]!=null && fields[c.id]){
-        writeCell(fields[c.id], meta.snap[c.id].note, {size:13, bold:false, hAlign:'center', vAlign:'center'});
+        writeCell(fields[c.id], meta.snap[c.id].note, {size:10, bold:false, hAlign:'center', vAlign:'center'});
       }
     });
+    
+    // Sous-total du groupe
+    if(meta.snap['st_'+g.id]!=null && fields['st_'+g.id]){
+      writeCell(fields['st_'+g.id], meta.snap['st_'+g.id], {size:10, bold:true, hAlign:'center', vAlign:'center'});
+    }
   });
   
-  // Total
-  const grandTotal = activeGroups.reduce((s,g)=>s+g.criteria.reduce((ss,c)=>ss+(meta.snap[c.id]?meta.snap[c.id].note:0),0),0);
-  writeCell(fields.total, grandTotal, {size:16, bold:true, hAlign:'center', vAlign:'center'});
+  // Total global (si existe)
+  if(fields.total){
+    const grandTotal = activeGroups.reduce((s,g)=>s+g.criteria.reduce((ss,c)=>ss+(meta.snap[c.id]?meta.snap[c.id].note:0),0),0);
+    writeCell(fields.total, grandTotal, {size:16, bold:true, hAlign:'center', vAlign:'center'});
+  }
   
-  // ADMIS / REFUSÉ
-  if(meta.admis){
-    writeCell(fields.admis, 'X', {size:16, bold:true, hAlign:'center', vAlign:'center'});
-    writeCell(fields.refuse, '', {size:16, bold:true, hAlign:'center', vAlign:'center'});
-  }else{
-    writeCell(fields.admis, '', {size:16, bold:true, hAlign:'center', vAlign:'center'});
-    writeCell(fields.refuse, 'X', {size:16, bold:true, hAlign:'center', vAlign:'center'});
+  // ADMIS / REFUSÉ (si existe dans le template)
+  if(fields.admis && fields.refuse){
+    if(meta.admis){
+      writeCell(fields.admis, 'X', {size:16, bold:true, hAlign:'center', vAlign:'center'});
+      writeCell(fields.refuse, '', {size:16, bold:true, hAlign:'center', vAlign:'center'});
+    }else{
+      writeCell(fields.admis, '', {size:16, bold:true, hAlign:'center', vAlign:'center'});
+      writeCell(fields.refuse, 'X', {size:16, bold:true, hAlign:'center', vAlign:'center'});
+    }
   }
   
   // Générer le fichier Excel en mémoire
@@ -940,8 +987,6 @@ async function buildExcelPDF(meta){
   }
   const base64Excel = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + btoa(binary);
   
-  // 🎯 SOLUTION : On stocke l'Excel ET on retournera le blob pour conversion PDF sur Drive
-  // L'Excel sera converti en PDF lors de l'envoi sur Google Drive (via l'API Drive)
   return base64Excel;
 }
 
@@ -1144,8 +1189,11 @@ async function uploadFileToDrive(blob,filename,folderId,convertToPDF=false){
     return pdfRes.json();
   }
   else{
-    // Upload PDF classique
-    const m={name:filename,parents:[folderId],mimeType:'application/pdf'};
+    // Upload fichier (PDF ou Excel)
+    const mimeType = filename.endsWith('.xlsx') 
+      ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      : 'application/pdf';
+    const m={name:filename,parents:[folderId],mimeType};
     const f=new FormData();
     f.append('metadata',new Blob([JSON.stringify(m)],{type:'application/json'}));
     f.append('file',blob);
@@ -1194,8 +1242,8 @@ async function sendAll(){
       // Détection Excel et conversion auto en PDF
       const isExcel = t.filename.endsWith('.xlsx') || t.pdfData.includes('spreadsheetml');
       if(isExcel){
-        const excelFilename = t.filename.replace('.pdf','.xlsx');
-        await uploadFileToDrive(blob, excelFilename, folderId, true);
+        // Le nom de fichier est déjà .xlsx, on l'envoie et il sera converti en PDF
+        await uploadFileToDrive(blob, t.filename, folderId, true);
       }else{
         await uploadPDF(blob, t.filename, folderId);
       }
@@ -1430,7 +1478,11 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 /* ════════════════════════════════════════
    INIT
 ════════════════════════════════════════ */
-loadLocal();updateConn(navigator.onLine);checkOAuthCallback();updateAllDriveBars();
+try{
+  loadLocal();updateConn(navigator.onLine);checkOAuthCallback();updateAllDriveBars();
+}catch(e){
+  console.error('❌ Erreur initialisation:', e);
+}
 
 /* ════════════════════════════════════════
    EVENT LISTENERS ROBUSTES (iPad/iOS fix)
@@ -1439,7 +1491,7 @@ loadLocal();updateConn(navigator.onLine);checkOAuthCallback();updateAllDriveBars
 ════════════════════════════════════════ */
 function bindBtn(id, fn){
   const el=document.getElementById(id);
-  if(!el)return;
+  if(!el){console.warn('⚠️ Bouton non trouvé:', id); return;}
   let touching=false;
   el.addEventListener('touchstart',()=>{touching=true;},{passive:true});
   el.addEventListener('touchend',function(e){
@@ -1454,9 +1506,14 @@ function bindBtn(id, fn){
   });
 }
 
-bindBtn('btn-th',    ()=>openModule('TH'));
-bindBtn('btn-echaf', ()=>openModule('ECHAF'));
-bindBtn('btn-testeurs', ()=>{ showScreen('s-testeurs'); renderTesteurs(); });
+try{
+  bindBtn('btn-th',    ()=>openModule('TH'));
+  bindBtn('btn-echaf', ()=>openModule('ECHAF'));
+  bindBtn('btn-testeurs', ()=>{ showScreen('s-testeurs'); renderTesteurs(); });
+  console.log('✅ Boutons initialisés avec succès');
+}catch(e){
+  console.error('❌ Erreur initialisation boutons:', e);
+}
 </script>
 </body>
 </html>
