@@ -392,12 +392,13 @@ const MODULES = {
        ]}
     ],
     admisRule:'all_groups', seuilGlobal:35,
-    // Mapping vers cellules Excel (selon feuille PRATIQUE)
+    // Mapping vers cellules Excel (selon feuille STYLE)
     excelFields:{
-      nom:'C3',           // Nom candidat (cellule fusionnée C3:D3)
-      date:'F3',          // Date (cellule fusionnée F3:H3)
-      testeur:'C15',      // Nom testeur (cellule fusionnée C15:D16)
-      sigTesteur:'F15',   // Signature (image, sur F15:H16)
+      nom:'C3',           // Nom candidat
+      date:'F3',          // Date
+      prenomTesteur:'E15', // Prénom testeur
+      nomTesteur:'E16',    // Nom testeur
+      sigTesteur:'F15',    // Signature (image)
       c1:'F5',            // Note critère 1
       c2:'F6',            // Note critère 2
       c3:'F7',            // Note critère 3
@@ -406,8 +407,8 @@ const MODULES = {
       c6:'F10',           // Note critère 6
       c7:'F11',           // Note critère 7
       total:'F12',        // Total
-      admis:'G13',        // X si admis (corrigé: était F13)
-      refuse:'G14'        // X si refusé (corrigé: était F14)
+      admis:'F13',        // X si admis
+      refuse:'F14'        // X si refusé
     }
   },
 
@@ -961,42 +962,35 @@ async function buildExcelPDF(meta){
   writeCell(fields.date, dateFormatted, {size:13, hAlign:'center', vAlign:'center'});
   
   // Testeur (prénom et nom séparés)
-  // Testeur (prénom et nom selon le format du module)
   const testeurObj = testeurs.find(t=>`${t.prenom} ${t.nom}`.trim()===meta.testeur||t.prenom===meta.testeur);
-  
-  // Si prenomTesteur existe, on utilise 2 cellules séparées (ECHAF, R490)
   if(testeurObj && fields.prenomTesteur){
     writeCell(fields.prenomTesteur, testeurObj.prenom||'', {size:8, hAlign:'center', vAlign:'bottom'});
     writeCell(fields.nomTesteur, testeurObj.nom||'', {size:8, hAlign:'center', vAlign:'top'});
-  }
-  // Sinon si testeur existe, on met prénom + nom dans une seule cellule (TH)
-  else if(testeurObj && fields.testeur){
-    const fullName = `${testeurObj.prenom||''} ${testeurObj.nom||''}`.trim();
-    writeCell(fields.testeur, fullName, {size:9, hAlign:'left', vAlign:'center'});
-  }
-  
-  // Signature (image) - on l'ajoute si elle existe
-  if(testeurObj && testeurObj.signature && fields.sigTesteur){
-    try{
-      // Convertir la signature base64 en image
-      const base64Data = testeurObj.signature.split(',')[1];
-      const imageId = workbook.addImage({
-        base64: base64Data,
-        extension: 'png',
-      });
-      
-      // Positionner l'image dans la cellule sigTesteur (ex: F15 -> col=5, row=14)
-      const match = fields.sigTesteur.match(/([A-Z]+)(\d+)/);
-      if(match){
-        const col = match[1].charCodeAt(0) - 65; // F -> 5
-        const row = parseInt(match[2]) - 1;       // 15 -> 14
-        worksheet.addImage(imageId, {
-          tl: { col, row },
-          ext: { width: 120, height: 40 }
+    
+    // Signature (image) - on l'ajoute si elle existe
+    if(testeurObj.signature && fields.sigTesteur){
+      try{
+        // Convertir la signature base64 en image
+        const base64Data = testeurObj.signature.split(',')[1];
+        const imageId = workbook.addImage({
+          base64: base64Data,
+          extension: 'png',
         });
+        
+        // Positionner l'image dans la cellule sigTesteur (ex: G31:G32)
+        // Extraire colonne et ligne de la cellule (ex: G31 -> col=6, row=30)
+        const match = fields.sigTesteur.match(/([A-Z]+)(\d+)/);
+        if(match){
+          const col = match[1].charCodeAt(0) - 65; // G -> 6
+          const row = parseInt(match[2]) - 1;       // 31 -> 30
+          worksheet.addImage(imageId, {
+            tl: { col, row },
+            ext: { width: 120, height: 40 }
+          });
+        }
+      }catch(e){
+        console.warn('Erreur ajout signature:', e);
       }
-    }catch(e){
-      console.warn('Erreur ajout signature:', e);
     }
   }
   
