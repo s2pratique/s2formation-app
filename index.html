@@ -8,6 +8,12 @@
 <meta name="apple-mobile-web-app-title" content="S2 Formation"/>
 <meta name="theme-color" content="#0d1f35"/>
 <title>S2 Formation — Tests Pratiques</title>
+
+<!-- ═══ PWA ═══ -->
+<link rel="manifest" href="manifest.json"/>
+<!-- iOS : icône écran d'accueil -->
+<link rel="apple-touch-icon" href="icons/icon-192.png"/>
+<!-- iOS : barre de statut transparente déjà définie plus haut -->
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.3.0/dist/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -1533,6 +1539,28 @@ try{
   loadLocal();updateConn(navigator.onLine);checkOAuthCallback();updateAllDriveBars();
 }catch(e){
   console.error('❌ Erreur initialisation:', e);
+}
+
+/* ════════════════════════════════════════
+   PWA — ENREGISTREMENT SERVICE WORKER
+════════════════════════════════════════ */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(reg => {
+        console.log('✅ Service Worker enregistré:', reg.scope);
+        /* Détection mise à jour disponible */
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              toast('Mise à jour disponible — Relancez l\'app pour l\'appliquer');
+            }
+          });
+        });
+      })
+      .catch(err => console.warn('⚠️ Service Worker non enregistré:', err));
+  });
 }
 
 /* ════════════════════════════════════════
