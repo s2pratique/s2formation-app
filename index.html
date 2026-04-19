@@ -501,7 +501,9 @@ const MODULES = {
       // Critères Réception
       r1:'G22',  r2:'G23',  r3:'G24',  r4:'G25',  r5:'G26',  r6:'G27',
       st_recep:'G28',  // SOUS-TOTAL RECEPTION
-      // admis/refuse ne sont pas dans le template Excel, on ne les gère pas
+      // Admis / Refusé
+      admis:'G29',     // croix si admis
+      refuse:'G30',    // croix si refusé
     }
   },
   // ── AJOUTER R482, R484, etc. ici sous la même forme ──
@@ -973,6 +975,12 @@ async function buildExcelPDF(meta){
       writeCell(fields.admis, '', {size:16, bold:true, hAlign:'center', vAlign:'center'});
       writeCell(fields.refuse, 'X', {size:16, bold:true, hAlign:'center', vAlign:'center'});
     }
+  }
+  
+  // 🗑️ IMPORTANT : Supprimer la feuille STYLE (Feuille 2) avant export
+  const styleSheet = workbook.getWorksheet('Feuille 2');
+  if(styleSheet){
+    workbook.removeWorksheet(styleSheet.id);
   }
   
   // Générer le fichier Excel en mémoire
