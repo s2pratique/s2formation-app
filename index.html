@@ -1256,21 +1256,6 @@ function getTestsNames(test){
   // Sinon, retourner le label du module
   return mod.label;
 }
-    }
-    saveLocal(); renderListTests();
-  }
-
-  isSyncing=false;
-  bar.style.display='none';
-  btn.disabled=false;
-  renderModuleList();
-
-  let msg=`${driveOk} PDF${driveOk>1?'s':''} envoyé${driveOk>1?'s':''} sur Drive`;
-  if(mailOk>0) msg+=`, ${mailOk} mail${mailOk>1?'s':''} envoyé${mailOk>1?'s':''}`;
-  if(mailSkipped>0) msg+=` (${mailSkipped} sans email)`;
-  if(errors.length) msg+=` — ${errors.length} erreur${errors.length>1?'s':''}`;
-  toast(msg);
-}
 
 async function sendRecapEmail(testsEnvoyes){
   console.log('📧 sendRecapEmail appelée avec', testsEnvoyes.length, 'test(s)');
